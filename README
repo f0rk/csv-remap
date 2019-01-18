@@ -1,0 +1,21 @@
+Change the headers on a CSV file based on a specified mapping.
+
+Call csv-remap with -h for help.
+
+Requires python and the openpyxl package if using XLSX files.
+
+
+The first argument is expected to be a file which defines the old name and new
+name for the column headers, as either a CSV or XLSX file:
+
+old,new
+Foo Indication,foo_indicator
+Bar Code,bar
+
+After that, it takes 0 or more arguments of files to process. If not files or -
+is given, standard in is read.
+
+Examples:
+
+cat /tmp/some_junk.csv | csv-remap /tmp/mapping.csv > /tmp/all_better.csv
+csv-remap /tmp/mapping.csv /tmp/some_junk.csv > /tmp/all_better.csv

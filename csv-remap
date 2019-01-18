@@ -1,0 +1,151 @@
+#!/usr/bin/env python
+
+import argparse
+import csv
+import sys
+import signal
+
+
+# without this, we may encounter fields larger than can be read
+csv.field_size_limit(sys.maxsize)
+
+
+class XLSXReader(object):
+
+    headers = None
+
+    def __init__(self, fileobj):
+        from openpyxl import load_workbook
+        self.wb = load_workbook(fileobj, read_only=True, data_only=True)
+        self.ws = self.wb.active
+
+    def __iter__(self):
+
+        for row in self.ws.rows:
+            yield [c.value for c in row]
+
+
+class XLSXDictReader(object):
+
+    headers = None
+
+    def __init__(self, fileobj):
+        from openpyxl import load_workbook
+        self.wb = load_workbook(fileobj, read_only=True, data_only=True)
+        self.ws = self.wb.active
+
+    def __iter__(self):
+
+        for row in self.ws.rows:
+
+            if self.headers is None:
+                self.headers = []
+                for cell in row:
+                    self.headers.append(cell.value)
+                continue
+
+            values = [c.value for c in row]
+            values = values[:len(self.headers)]
+            while len(values) < len(self.headers):
+                values.append(None)
+
+            yield dict(zip(self.headers, values))
+
+
+class Remap(object):
+
+    def __init__(self, mapping_path):
+        self.mappings = {}
+
+        if mapping_path.endswith(".csv") or mapping_path.endswith(".xlsx"):
+            if mapping_path.endswith(".csv"):
+                cfp = open(mapping_path, "r")
+                reader = csv.DictReader(cfp)
+            elif mapping_path.endswith(".xlsx"):
+                cfp = open(mapping_path, "rb")
+                reader = XLSXDictReader(cfp)
+
+            for row in reader:
+                self.mappings[row["old"]] = row["new"]
+
+        else:
+            raise Exception(
+                "Unable to use mapping file {!r} (must be either csv or xlsx)"
+                .format(mapping_path)
+            )
+
+    def run(self, fp):
+
+        # try to strip out the unicode bom, thanks new excel
+        def strip_bom(field):
+            if field[:1] == "\ufeff":
+                field = field[1:]
+
+            try:
+                field_bytes = bytes(field)
+            except TypeError as tex:
+                if "string argument without an encoding" not in str(tex):
+                    raise
+                else:
+                    return field
+
+            if field_bytes[:3] == b"\xef\xbb\xbf":
+                return field[3:]
+
+            return field
+
+        if not fp or fp == "-":
+            reader = csv.reader(sys.stdin)
+        else:
+            if isinstance(fp, str):
+                if fp.endswith(".xlsx"):
+                    reader = XLSXReader(fp)
+                else:
+                    fp = open(fp)
+                    reader = csv.reader(fp)
+            else:
+                reader = csv.reader(fp)
+
+        writer = csv.writer(sys.stdout)
+
+        have_remapped = False
+        
+        for row in reader:
+
+            if not have_remapped:
+
+                new_row = []
+                for value in row:
+
+                    fixed_value = strip_bom(value).strip()
+
+                    if fixed_value in self.mappings:
+                        new_header = self.mappings[fixed_value]
+                        if not new_header:
+                            new_header = value
+                    else:
+                        new_header = value
+
+                    new_row.append(new_header)
+
+                row = new_row
+
+                have_remapped = True
+
+            writer.writerow(row)
+
+
+if __name__ == "__main__":
+
+    # ignore pipe errors using head, etc
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL) 
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("mapping", help="path to mapping document")
+    parser.add_argument("file", nargs="?", help="file to remap headers for")
+
+    args = parser.parse_args()
+
+    remapper = Remap(args.mapping)
+
+    remapper.run(args.file)
